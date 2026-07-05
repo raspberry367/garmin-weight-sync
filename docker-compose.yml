@@ -1,0 +1,42 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: garmin-weight-sync-app
+    ports:
+      - "3000:3000"
+    environment:
+      SERVER_PORT: 3000
+      GARMIN_USERNAME: ${GARMIN_USERNAME:-demo}
+      GARMIN_PASSWORD: ${GARMIN_PASSWORD:-demo}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: appuser
+      DB_PASSWORD: apppass
+      DB_NAME: garmin_weight_sync
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.4
+    container_name: garmin-weight-sync-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: garmin_weight_sync
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -prootpass --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  mysql_data:
