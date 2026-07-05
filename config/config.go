@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -18,6 +19,13 @@ type Config struct {
 	DBUser         string `env:"DB_USER" envDefault:"appuser"`
 	DBPassword     string `env:"DB_PASSWORD" envDefault:"apppass"`
 	DBName         string `env:"DB_NAME" envDefault:"garmin_weight_sync"`
+
+	GarminTokenCachePath string `env:"GARMIN_TOKEN_CACHE_PATH" envDefault:"garmin_token.json"`
+	SyncIntervalMinutes  int    `env:"SYNC_INTERVAL_MINUTES" envDefault:"60"`
+
+	// Optional Telegram alerting. When either is empty, alerts are disabled.
+	TelegramBotToken string `env:"TELEGRAM_BOT_TOKEN"`
+	TelegramChatID   string `env:"TELEGRAM_CHAT_ID"`
 }
 
 // NewConfig creates a new Config instance by loading from environment.
@@ -36,6 +44,12 @@ func NewConfig() (*Config, error) {
 		DBUser:         getEnv("DB_USER", "appuser"),
 		DBPassword:     getEnv("DB_PASSWORD", "apppass"),
 		DBName:         getEnv("DB_NAME", "garmin_weight_sync"),
+
+		GarminTokenCachePath: getEnv("GARMIN_TOKEN_CACHE_PATH", "garmin_token.json"),
+		SyncIntervalMinutes:  getEnvInt("SYNC_INTERVAL_MINUTES", 60),
+
+		TelegramBotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:   getEnv("TELEGRAM_CHAT_ID", ""),
 	}
 
 	return cfg, nil
@@ -68,4 +82,16 @@ func getEnv(key, defaultValue string) string {
 		return val
 	}
 	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
 }

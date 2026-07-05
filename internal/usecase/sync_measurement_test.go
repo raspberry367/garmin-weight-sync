@@ -20,6 +20,14 @@ func (m *mockMeasurementRepository) Save(ctx context.Context, measurement *domai
 	return nil
 }
 
+func (m *mockMeasurementRepository) FindUnsynced(ctx context.Context) ([]*domain.BodyComposition, error) {
+	return nil, nil
+}
+
+func (m *mockMeasurementRepository) MarkSynced(ctx context.Context, measurement *domain.BodyComposition) error {
+	return nil
+}
+
 func TestSyncMeasurementUseCase_Execute(t *testing.T) {
 	t.Run("successful save of full body composition", func(t *testing.T) {
 		repo := &mockMeasurementRepository{}
@@ -28,7 +36,6 @@ func TestSyncMeasurementUseCase_Execute(t *testing.T) {
 		m := &domain.BodyComposition{
 			BMI:           22.5,
 			FatPercentage: 15.0,
-			LeanBodyMass:  68.0,
 			Weight:        80.0,
 			Timestamp:     1625345600000,
 			AppleHealthID: "test-uuid-1",

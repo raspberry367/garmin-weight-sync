@@ -1,4 +1,4 @@
-.PHONY: up down build restart logs ps mysql-shell clean
+.PHONY: up down build restart logs ps mysql-shell clean garmin-login
 
 # Start all services in the background
 up:
@@ -31,3 +31,8 @@ mysql-shell:
 # Stop services and remove all volumes (clean start)
 clean:
 	docker compose down -v
+
+# One-off interactive Garmin login (handles MFA) to seed the token cache
+# used by the cron-based sync. Run this once before relying on auto-sync.
+garmin-login:
+	docker compose exec -it app /app/garmin-login

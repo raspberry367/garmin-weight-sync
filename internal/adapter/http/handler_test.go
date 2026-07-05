@@ -20,6 +20,14 @@ func (m *mockRepository) Save(ctx context.Context, measurement *domain.BodyCompo
 	return nil
 }
 
+func (m *mockRepository) FindUnsynced(ctx context.Context) ([]*domain.BodyComposition, error) {
+	return nil, nil
+}
+
+func (m *mockRepository) MarkSynced(ctx context.Context, measurement *domain.BodyComposition) error {
+	return nil
+}
+
 func TestSyncMeasurementHandler(t *testing.T) {
 	repo := &mockRepository{}
 	uc := usecase.NewSyncMeasurementUseCase(repo)
@@ -30,7 +38,6 @@ func TestSyncMeasurementHandler(t *testing.T) {
 		payload := map[string]interface{}{
 			"bmi":             22.5,
 			"fat_percentage":  15.0,
-			"lean_body_mass":  68.0,
 			"weight":          80.0,
 			"timestamp":       1625345600000,
 			"apple_health_id": "test-uuid-full",

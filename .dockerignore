@@ -1,0 +1,7 @@
+# Secrets are mounted at runtime (see docker-compose.yml), never baked in.
+.env
+.env.local
+.git
+.claude
+garmin_token.json
+data/

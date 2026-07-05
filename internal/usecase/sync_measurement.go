@@ -21,7 +21,7 @@ func NewSyncMeasurementUseCase(repo domain.MeasurementRepository) *SyncMeasureme
 // Execute orchestrates the duplicate check, validation, and database save.
 func (u *SyncMeasurementUseCase) Execute(ctx context.Context, m *domain.BodyComposition) error {
 	// If all fields are present, perform domain validation
-	if m.Weight > 0 && m.BMI > 0 && m.LeanBodyMass > 0 {
+	if m.Weight > 0 && m.BMI > 0 {
 		if err := m.Validate(); err != nil {
 			return fmt.Errorf("domain validation failed: %w", err)
 		}

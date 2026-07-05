@@ -110,8 +110,6 @@ func (h *Handler) SyncMeasurement(c fiber.Ctx) error {
 			comp.BMI = val
 		case MeasurementFatPercent:
 			comp.FatPercentage = val
-		case MeasurementLeanBodyMass:
-			comp.LeanBodyMass = val
 		}
 
 		if err := h.useCase.Execute(c.Context(), comp); err != nil {
@@ -197,32 +195,6 @@ func (h *Handler) SyncMeasurement(c fiber.Ctx) error {
 		}
 
 		return c.JSON(MeasurementResponse{Synced: true, Measurement: "fat_percentage", Message: "fat percentage received and saved to database"})
-
-	case keys["lbm"] != nil || keys["lean_body_mass"] != nil:
-		var lbmReq RawLeanBodyMassRequest
-		if err := json.Unmarshal(body, &lbmReq); err != nil {
-			log.Printf("Error parsing raw LBM request: %v", err)
-			return c.Status(fiber.StatusBadRequest).JSON(MeasurementResponse{Synced: false, Message: "invalid LBM JSON"})
-		}
-
-		val := lbmReq.LeanBodyMass
-		if val.Float64() == 0 && lbmReq.LeanBodyMassAlt.Float64() != 0 {
-			val = lbmReq.LeanBodyMassAlt
-		}
-		log.Printf("Parsed raw lean body mass request:")
-		log.Printf("  Lean Body Mass: %.6f kg", val.Float64())
-
-		comp := &domain.BodyComposition{
-			LeanBodyMass:  val.Float64(),
-			Timestamp:     time.Now().UnixMilli(),
-			AppleHealthID: generateDeterministicID("lbm", val.Float64()),
-		}
-		if err := h.useCase.Execute(c.Context(), comp); err != nil {
-			log.Printf("Usecase execution failed for raw LBM: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(MeasurementResponse{Synced: false, Message: err.Error()})
-		}
-
-		return c.JSON(MeasurementResponse{Synced: true, Measurement: "lean_body_mass", Message: "lean body mass received and saved to database"})
 	}
 
 	// If we got here, none of the parsing worked

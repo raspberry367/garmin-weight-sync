@@ -2,3 +2,5 @@
 .git
 vendor
 .env
+data/
+context

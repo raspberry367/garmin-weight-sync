@@ -10,10 +10,9 @@ import (
 type MeasurementType string
 
 const (
-	MeasurementWeight       MeasurementType = "weight"
-	MeasurementBMI          MeasurementType = "bmi"
-	MeasurementFatPercent   MeasurementType = "fat"
-	MeasurementLeanBodyMass MeasurementType = "lbm"
+	MeasurementWeight     MeasurementType = "weight"
+	MeasurementBMI        MeasurementType = "bmi"
+	MeasurementFatPercent MeasurementType = "fat"
 )
 
 // FlexibleFloat64 accepts JSON numbers or numeric strings.
@@ -69,12 +68,6 @@ type RawFatPercentageRequest struct {
 	FatPercentage FlexibleFloat64 `json:"fat"` // accept both "fat" and "fat_percentage" depending on sender
 	// also accept fat_percentage field
 	FatPercentageAlt FlexibleFloat64 `json:"fat_percentage"`
-}
-
-// RawLeanBodyMassRequest represents a raw lean body mass-only request.
-type RawLeanBodyMassRequest struct {
-	LeanBodyMass    FlexibleFloat64 `json:"lbm"`
-	LeanBodyMassAlt FlexibleFloat64 `json:"lean_body_mass"`
 }
 
 // MeasurementResponse represents the API response.

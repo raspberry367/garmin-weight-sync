@@ -8,13 +8,20 @@ services:
       - "3000:3000"
     environment:
       SERVER_PORT: 3000
-      GARMIN_USERNAME: ${GARMIN_USERNAME:-demo}
-      GARMIN_PASSWORD: ${GARMIN_PASSWORD:-demo}
+      GARMIN_TOKEN_CACHE_PATH: /app/data/garmin_token.json
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: appuser
       DB_PASSWORD: apppass
       DB_NAME: garmin_weight_sync
+    volumes:
+      - ./data:/app/data
+      # Mount .env read-only and let the app's godotenv loader read Garmin
+      # credentials directly. This bypasses Compose's ${} interpolation,
+      # which would otherwise collapse '$$' in the password to a single '$'.
+      # DB_* / SERVER_PORT above win because godotenv only sets vars that
+      # aren't already present in the environment.
+      - ./.env:/app/.env:ro
     depends_on:
       mysql:
         condition: service_healthy
