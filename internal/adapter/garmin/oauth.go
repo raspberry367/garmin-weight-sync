@@ -1,6 +1,7 @@
 package garmin
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
@@ -85,17 +86,17 @@ func computeHMACSHA1Signature(method, baseURL string, params map[string]string, 
 
 	pairs := make([]string, 0, len(keys))
 	for _, k := range keys {
-		pairs = append(pairs, fmt.Sprintf("%s=%s", url.QueryEscape(k), url.QueryEscape(params[k])))
+		pairs = append(pairs, fmt.Sprintf("%s=%s", rfc3986Escape(k), rfc3986Escape(params[k])))
 	}
 	paramString := strings.Join(pairs, "&")
 
 	baseString := strings.Join([]string{
 		method,
-		url.QueryEscape(baseURL),
-		url.QueryEscape(paramString),
+		rfc3986Escape(baseURL),
+		rfc3986Escape(paramString),
 	}, "&")
 
-	signingKey := url.QueryEscape(consumerSecret) + "&" + url.QueryEscape(tokenSecret)
+	signingKey := rfc3986Escape(consumerSecret) + "&" + rfc3986Escape(tokenSecret)
 
 	mac := hmac.New(sha1.New, []byte(signingKey))
 	mac.Write([]byte(baseString))
@@ -113,9 +114,29 @@ func buildAuthorizationHeader(params map[string]string) string {
 
 	pairs := make([]string, 0, len(keys))
 	for _, k := range keys {
-		pairs = append(pairs, fmt.Sprintf(`%s="%s"`, k, url.QueryEscape(params[k])))
+		pairs = append(pairs, fmt.Sprintf(`%s="%s"`, k, rfc3986Escape(params[k])))
 	}
 	return "OAuth " + strings.Join(pairs, ", ")
+}
+
+// rfc3986Escape percent-encodes s per RFC 3986 unreserved characters
+// (ALPHA / DIGIT / "-" / "." / "_" / "~"), which is what OAuth1 signing
+// (RFC 5849 §3.6) requires. url.QueryEscape is the wrong tool here: it follows
+// application/x-www-form-urlencoded rules and encodes a space as '+' rather
+// than '%20', so any signed value containing one would diverge from the
+// signature Garmin computes on its end.
+func rfc3986Escape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '.' || c == '_' || c == '~' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
 
 func randomNonce() (string, error) {
@@ -128,7 +149,7 @@ func randomNonce() (string, error) {
 
 // getOAuth1 exchanges a CAS service ticket for a long-lived OAuth1 token pair
 // (mechanism doc §3.2 Step 3).
-func getOAuth1(httpClient *http.Client, ticket string) (*oauth1Token, error) {
+func getOAuth1(ctx context.Context, httpClient *http.Client, ticket string) (*oauth1Token, error) {
 	reqURL := fmt.Sprintf("%s?ticket=%s&login-url=%s&accepts-mfa-tokens=true",
 		oauth1PreauthorizedURL, url.QueryEscape(ticket), url.QueryEscape(ssoEmbedURL))
 
@@ -137,7 +158,7 @@ func getOAuth1(httpClient *http.Client, ticket string) (*oauth1Token, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -173,13 +194,13 @@ func getOAuth1(httpClient *http.Client, ticket string) (*oauth1Token, error) {
 
 // getOAuth2 exchanges the OAuth1 token pair for a short-lived OAuth2 bearer
 // token (mechanism doc §3.2 Step 4).
-func getOAuth2(httpClient *http.Client, tok *oauth1Token) (*oauth2Token, error) {
+func getOAuth2(ctx context.Context, httpClient *http.Client, tok *oauth1Token) (*oauth2Token, error) {
 	authHeader, err := signOAuth1(http.MethodPost, oauth2ExchangeURL, tok.Token, tok.Secret)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, oauth2ExchangeURL, strings.NewReader(""))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, oauth2ExchangeURL, strings.NewReader(""))
 	if err != nil {
 		return nil, err
 	}

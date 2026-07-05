@@ -55,13 +55,21 @@ func (h *Handler) SyncMeasurement(c fiber.Ctx) error {
 
 	// 1. Full Body Composition
 	if keys["apple_health_id"] != nil {
-		var comp domain.BodyComposition
-		if err := json.Unmarshal(body, &comp); err != nil {
+		var req FullBodyCompositionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
 			log.Printf("Error parsing full body composition: %v", err)
 			return c.Status(fiber.StatusBadRequest).JSON(MeasurementResponse{Synced: false, Message: "invalid body composition JSON"})
 		}
 
-		if err := h.useCase.Execute(c.Context(), &comp); err != nil {
+		comp := &domain.BodyComposition{
+			BMI:           req.BMI,
+			FatPercentage: req.FatPercentage,
+			Weight:        req.Weight,
+			Timestamp:     req.Timestamp,
+			AppleHealthID: req.AppleHealthID,
+		}
+
+		if err := h.useCase.Execute(c.Context(), comp); err != nil {
 			log.Printf("Usecase execution failed for full body composition: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(MeasurementResponse{Synced: false, Message: err.Error()})
 		}

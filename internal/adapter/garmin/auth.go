@@ -1,6 +1,7 @@
 package garmin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +32,7 @@ var (
 // CAS service ticket that can be exchanged for OAuth1/OAuth2 tokens.
 type ssoAuth struct {
 	httpClient *http.Client
-	sleep      func()
+	sleep      func(ctx context.Context) error
 
 	mfaCSRF string
 }
@@ -40,7 +41,7 @@ type ssoAuth struct {
 // requires the session cookies from /sso/embed to be reused on every later
 // call). sleep is invoked between steps to avoid Cloudflare rate-limiting
 // (§3.3); pass a no-op in tests.
-func newSSOAuth(sleep func()) (*ssoAuth, error) {
+func newSSOAuth(sleep func(ctx context.Context) error) (*ssoAuth, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("create cookie jar: %w", err)
@@ -52,9 +53,17 @@ func newSSOAuth(sleep func()) (*ssoAuth, error) {
 }
 
 // randomAntiBotSleep sleeps 10-16s, mirroring the reference implementation's
-// anti-bot delay between SSO steps.
-func randomAntiBotSleep() {
-	time.Sleep(10*time.Second + time.Duration(rand.Intn(6001))*time.Millisecond)
+// anti-bot delay between SSO steps. It returns early with ctx.Err() if ctx is
+// cancelled first, so a shutdown signal can interrupt a login in progress
+// instead of waiting out the full delay.
+func randomAntiBotSleep(ctx context.Context) error {
+	d := 10*time.Second + time.Duration(rand.Intn(6001))*time.Millisecond
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 const ssoWidgetQuery = "id=gauth-widget&embedWidget=true&gauthHost=" + ssoEmbedURLEncoded +
@@ -65,23 +74,27 @@ const ssoEmbedURLEncoded = "https%3A%2F%2Fsso.garmin.com%2Fsso%2Fembed"
 // login runs the full SSO flow: init cookies -> CSRF -> submit credentials.
 // It returns a service ticket, or ErrMFARequired if a code is needed (call
 // completeMFA next).
-func (a *ssoAuth) login(username, password string) (string, error) {
-	if err := a.initCookies(); err != nil {
+func (a *ssoAuth) login(ctx context.Context, username, password string) (string, error) {
+	if err := a.initCookies(ctx); err != nil {
 		return "", fmt.Errorf("init cookies: %w", err)
 	}
-	a.sleep()
+	if err := a.sleep(ctx); err != nil {
+		return "", err
+	}
 
-	csrf, err := a.getCSRF()
+	csrf, err := a.getCSRF(ctx)
 	if err != nil {
 		return "", fmt.Errorf("get csrf: %w", err)
 	}
-	a.sleep()
+	if err := a.sleep(ctx); err != nil {
+		return "", err
+	}
 
-	return a.sendCredentials(username, password, csrf)
+	return a.sendCredentials(ctx, username, password, csrf)
 }
 
 // completeMFA finishes a login that returned ErrMFARequired.
-func (a *ssoAuth) completeMFA(code string) (string, error) {
+func (a *ssoAuth) completeMFA(ctx context.Context, code string) (string, error) {
 	if a.mfaCSRF == "" {
 		return "", errors.New("garmin: completeMFA called without a pending MFA challenge")
 	}
@@ -93,7 +106,7 @@ func (a *ssoAuth) completeMFA(code string) (string, error) {
 		"_csrf":    {a.mfaCSRF},
 	}
 
-	req, err := http.NewRequest(http.MethodPost, ssoMFAURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ssoMFAURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
@@ -113,8 +126,8 @@ func (a *ssoAuth) completeMFA(code string) (string, error) {
 	return ticket, nil
 }
 
-func (a *ssoAuth) initCookies() error {
-	req, err := http.NewRequest(http.MethodGet, ssoEmbedURL+"?"+ssoWidgetQuery, nil)
+func (a *ssoAuth) initCookies(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ssoEmbedURL+"?"+ssoWidgetQuery, nil)
 	if err != nil {
 		return err
 	}
@@ -124,8 +137,8 @@ func (a *ssoAuth) initCookies() error {
 	return err
 }
 
-func (a *ssoAuth) getCSRF() (string, error) {
-	req, err := http.NewRequest(http.MethodGet, ssoSigninURL+"?"+ssoWidgetQuery, nil)
+func (a *ssoAuth) getCSRF(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ssoSigninURL+"?"+ssoWidgetQuery, nil)
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +156,7 @@ func (a *ssoAuth) getCSRF() (string, error) {
 	return csrf, nil
 }
 
-func (a *ssoAuth) sendCredentials(username, password, csrf string) (string, error) {
+func (a *ssoAuth) sendCredentials(ctx context.Context, username, password, csrf string) (string, error) {
 	form := url.Values{
 		"username": {username},
 		"password": {password},
@@ -151,7 +164,7 @@ func (a *ssoAuth) sendCredentials(username, password, csrf string) (string, erro
 		"_csrf":    {csrf},
 	}
 
-	req, err := http.NewRequest(http.MethodPost, ssoSigninURL+"?"+ssoWidgetQuery, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ssoSigninURL+"?"+ssoWidgetQuery, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}

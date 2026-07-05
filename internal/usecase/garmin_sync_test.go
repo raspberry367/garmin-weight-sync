@@ -32,7 +32,7 @@ type fakeSyncer struct {
 	synced  []*domain.BodyComposition
 }
 
-func (s *fakeSyncer) Sync(m *domain.BodyComposition) error {
+func (s *fakeSyncer) Sync(ctx context.Context, m *domain.BodyComposition) error {
 	if err, ok := s.failFor[m.AppleHealthID]; ok {
 		return err
 	}
@@ -68,12 +68,12 @@ func TestGarminSyncUseCase_Execute(t *testing.T) {
 		if len(repo.synced) != 2 {
 			t.Fatalf("expected 2 measurements marked synced, got %d", len(repo.synced))
 		}
-		if len(notifier.messages) != 0 {
-			t.Fatalf("expected no alerts on success, got %v", notifier.messages)
+		if len(notifier.messages) != 1 {
+			t.Fatalf("expected 1 success alert, got %v", notifier.messages)
 		}
 	})
 
-	t.Run("a transient sync failure is logged, skipped, and alerted once", func(t *testing.T) {
+	t.Run("a transient sync failure is logged, skipped, and alerted", func(t *testing.T) {
 		repo := &fakeUnsyncedRepository{unsynced: []*domain.BodyComposition{
 			{AppleHealthID: "day-1", Weight: 80},
 			{AppleHealthID: "day-2", Weight: 81},
@@ -91,8 +91,8 @@ func TestGarminSyncUseCase_Execute(t *testing.T) {
 		if len(repo.synced) != 1 || repo.synced[0].AppleHealthID != "day-2" {
 			t.Fatalf("expected only day-2 to be marked synced, got %+v", repo.synced)
 		}
-		if len(notifier.messages) != 1 {
-			t.Fatalf("expected 1 failure alert, got %d: %v", len(notifier.messages), notifier.messages)
+		if len(notifier.messages) != 2 {
+			t.Fatalf("expected 1 failure alert + 1 success alert, got %d: %v", len(notifier.messages), notifier.messages)
 		}
 	})
 

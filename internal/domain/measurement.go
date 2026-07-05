@@ -3,12 +3,23 @@ package domain
 import "errors"
 
 // BodyComposition represents body composition metrics from Apple Health.
+// It's a pure domain entity: adapters map their own wire DTOs onto it rather
+// than unmarshalling JSON straight into it.
 type BodyComposition struct {
-	BMI           float64 `json:"bmi"`
-	FatPercentage float64 `json:"fat_percentage"`  // %
-	Weight        float64 `json:"weight"`          // kg
-	Timestamp     int64   `json:"timestamp"`       // Unix timestamp (ms)
-	AppleHealthID string  `json:"apple_health_id"` // UUID from Apple Health for idempotency
+	BMI           float64
+	FatPercentage float64 // %
+	Weight        float64 // kg
+	Timestamp     int64   // Unix timestamp (ms)
+	AppleHealthID string  // UUID from Apple Health for idempotency
+
+	// MeasurementDate is the calendar day (YYYY-MM-DD) that this measurement's
+	// row is keyed on in storage — the aggregate's real identity, since
+	// storage holds one row per day rather than one per Timestamp. It's
+	// populated by the repository on read (FindUnsynced) and used for
+	// identity matching (MarkSynced) instead of re-deriving it from Timestamp;
+	// intake paths (Save) don't need to set it since the repository derives
+	// it fresh from Timestamp at insert time.
+	MeasurementDate string
 }
 
 // Validate checks if the measurement is valid.

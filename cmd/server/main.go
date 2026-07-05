@@ -62,26 +62,39 @@ func main() {
 	syncUseCase := usecase.NewSyncMeasurementUseCase(repo)
 
 	// Initialize Router with Usecase
-	app := adapterhttp.SetupRouter(syncUseCase)
+	app := adapterhttp.SetupRouter(syncUseCase, cfg.APIKey)
 
-	// Initialize Garmin client + cron-based sync of unsynced measurements
+	notifier := telegram.New(cfg.TelegramBotToken, cfg.TelegramChatID)
+	if notifier.Enabled() {
+		log.Println("Telegram alerting enabled")
+	}
+
+	// Initialize Garmin client + cron-based sync of unsynced measurements. A
+	// failure here (e.g. a corrupt token cache file) disables Garmin sync but
+	// must not take down the unrelated measurement-intake HTTP API — every
+	// other Garmin failure path in this codebase is designed to degrade
+	// instead of crash the process, so startup should behave the same way.
+	stopSync := func() {}
+	var syncDone chan struct{}
+
 	garminClient, err := garmin.NewClient(garmin.Config{
 		Username:       cfg.GarminUsername,
 		Password:       cfg.GarminPassword,
 		TokenCachePath: cfg.GarminTokenCachePath,
 	})
 	if err != nil {
-		log.Fatalf("Failed to initialize garmin client: %v", err)
-	}
-	notifier := telegram.New(cfg.TelegramBotToken, cfg.TelegramChatID)
-	if notifier.Enabled() {
-		log.Println("Telegram alerting enabled")
-	}
-	garminSyncUseCase := usecase.NewGarminSyncUseCase(repo, garminClient, notifier)
+		log.Printf("Failed to initialize garmin client, Garmin sync disabled: %v", err)
+		if nerr := notifier.Notify(context.Background(), fmt.Sprintf("⚠️ Garmin sync disabled at startup: %v", err)); nerr != nil {
+			log.Printf("failed to send alert: %v", nerr)
+		}
+	} else {
+		garminSyncUseCase := usecase.NewGarminSyncUseCase(repo, garminClient, notifier)
 
-	syncCtx, stopSync := context.WithCancel(context.Background())
-	syncDone := make(chan struct{})
-	go runGarminSyncLoop(syncCtx, syncDone, garminSyncUseCase, time.Duration(cfg.SyncIntervalMinutes)*time.Minute)
+		var syncCtx context.Context
+		syncCtx, stopSync = context.WithCancel(context.Background())
+		syncDone = make(chan struct{})
+		go runGarminSyncLoop(syncCtx, syncDone, garminSyncUseCase, time.Duration(cfg.SyncIntervalMinutes)*time.Minute)
+	}
 
 	// Setup graceful shutdown listener
 	sigChan := make(chan os.Signal, 1)
@@ -99,9 +112,11 @@ func main() {
 	sig := <-sigChan
 	log.Printf("Received signal %v. Initiating graceful shutdown...", sig)
 
-	// Stop the sync loop and wait for any in-flight sync to finish
+	// Stop the sync loop (if it's running) and wait for any in-flight sync to finish
 	stopSync()
-	<-syncDone
+	if syncDone != nil {
+		<-syncDone
+	}
 
 	// Shutdown Fiber app with a short timeout
 	if err := app.Shutdown(); err != nil {

@@ -24,8 +24,11 @@ type MeasurementRepository interface {
 }
 
 // MeasurementSyncer defines the contract for syncing to Garmin Connect.
+// Implementations should respect ctx cancellation during the (potentially
+// tens-of-seconds) SSO login flow, so a caller can abort a stuck sync rather
+// than block on it indefinitely (e.g. during graceful shutdown).
 type MeasurementSyncer interface {
-	Sync(measurement *BodyComposition) error
+	Sync(ctx context.Context, measurement *BodyComposition) error
 }
 
 // Notifier delivers an operational alert (e.g. to Telegram) when unattended

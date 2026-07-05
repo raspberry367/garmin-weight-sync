@@ -19,7 +19,9 @@ type GarminSyncUseCase struct {
 	notifier domain.Notifier
 }
 
-// NewGarminSyncUseCase creates a new GarminSyncUseCase. notifier may be nil.
+// NewGarminSyncUseCase creates a new GarminSyncUseCase. notifier must be
+// non-nil; pass a no-op implementation (e.g. telegram.New("", "")) to disable
+// alerting.
 func NewGarminSyncUseCase(repo domain.MeasurementRepository, syncer domain.MeasurementSyncer, notifier domain.Notifier) *GarminSyncUseCase {
 	return &GarminSyncUseCase{repo: repo, syncer: syncer, notifier: notifier}
 }
@@ -36,9 +38,9 @@ func (u *GarminSyncUseCase) Execute(ctx context.Context) error {
 		return err
 	}
 
-	var failed int
+	var failed, succeeded int
 	for _, m := range measurements {
-		if err := u.syncer.Sync(m); err != nil {
+		if err := u.syncer.Sync(ctx, m); err != nil {
 			if errors.Is(err, domain.ErrSyncAuthRequired) {
 				u.alert(ctx, fmt.Sprintf("⚠️ Garmin sync halted: manual login required.\n%v\n\nRun `make garmin-login` once the account is usable again.", err))
 				return err
@@ -49,11 +51,16 @@ func (u *GarminSyncUseCase) Execute(ctx context.Context) error {
 		}
 		if err := u.repo.MarkSynced(ctx, m); err != nil {
 			log.Printf("garmin sync: failed to mark measurement %s synced: %v", m.AppleHealthID, err)
+			continue
 		}
+		succeeded++
 	}
 
 	if failed > 0 {
 		u.alert(ctx, fmt.Sprintf("⚠️ Garmin sync: %d of %d measurement(s) failed to upload. See server logs.", failed, len(measurements)))
+	}
+	if succeeded > 0 {
+		u.alert(ctx, fmt.Sprintf("✅ Garmin sync: %d measurement(s) uploaded successfully.", succeeded))
 	}
 
 	return nil
@@ -62,9 +69,6 @@ func (u *GarminSyncUseCase) Execute(ctx context.Context) error {
 // alert sends an operational notification, logging (but not failing) if the
 // notifier itself errors — a broken alert channel must not break sync.
 func (u *GarminSyncUseCase) alert(ctx context.Context, message string) {
-	if u.notifier == nil {
-		return
-	}
 	if err := u.notifier.Notify(ctx, message); err != nil {
 		log.Printf("garmin sync: failed to send alert: %v", err)
 	}

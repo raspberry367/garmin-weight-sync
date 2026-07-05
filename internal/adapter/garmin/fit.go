@@ -54,8 +54,10 @@ func encodeWeightFIT(m *domain.BodyComposition) ([]byte, error) {
 
 	ws := mesgdef.NewWeightScale(nil).
 		SetTimestamp(ts).
-		SetUserProfileIndex(0).
-		SetWeightScaled(m.Weight)
+		SetUserProfileIndex(0)
+	if m.Weight > 0 {
+		ws.SetWeightScaled(m.Weight)
+	}
 	if m.FatPercentage > 0 {
 		ws.SetPercentFatScaled(m.FatPercentage)
 	}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -52,7 +53,30 @@ func NewConfig() (*Config, error) {
 		TelegramChatID:   getEnv("TELEGRAM_CHAT_ID", ""),
 	}
 
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// validate enforces the required env vars and sane value ranges at boot,
+// rather than failing later inside the background sync goroutine (or, for
+// SyncIntervalMinutes, panicking time.NewTicker at startup).
+func (c *Config) validate() error {
+	if c.GarminUsername == "" {
+		return fmt.Errorf("GARMIN_USERNAME is required")
+	}
+	if c.GarminPassword == "" {
+		return fmt.Errorf("GARMIN_PASSWORD is required")
+	}
+	if c.APIKey == "" {
+		return fmt.Errorf("API_KEY is required")
+	}
+	if c.SyncIntervalMinutes <= 0 {
+		return fmt.Errorf("SYNC_INTERVAL_MINUTES must be positive, got %d", c.SyncIntervalMinutes)
+	}
+	return nil
 }
 
 func loadDotEnv() error {

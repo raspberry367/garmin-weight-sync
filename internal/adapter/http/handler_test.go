@@ -29,9 +29,11 @@ func (m *mockRepository) MarkSynced(ctx context.Context, measurement *domain.Bod
 }
 
 func TestSyncMeasurementHandler(t *testing.T) {
+	const testAPIKey = "test-api-key"
+
 	repo := &mockRepository{}
 	uc := usecase.NewSyncMeasurementUseCase(repo)
-	app := SetupRouter(uc)
+	app := SetupRouter(uc, testAPIKey)
 
 	t.Run("POST full body composition", func(t *testing.T) {
 		repo.saved = nil
@@ -45,6 +47,7 @@ func TestSyncMeasurementHandler(t *testing.T) {
 		body, _ := json.Marshal(payload)
 		req, _ := http.NewRequest("POST", "/api/v1/measurements", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", testAPIKey)
 
 		resp, err := app.Test(req)
 		if err != nil {
@@ -79,6 +82,7 @@ func TestSyncMeasurementHandler(t *testing.T) {
 		body, _ := json.Marshal(payload)
 		req, _ := http.NewRequest("POST", "/api/v1/measurements", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", testAPIKey)
 
 		resp, err := app.Test(req)
 		if err != nil {
@@ -110,6 +114,7 @@ func TestSyncMeasurementHandler(t *testing.T) {
 		body, _ := json.Marshal(payload)
 		req, _ := http.NewRequest("POST", "/api/v1/measurements", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", testAPIKey)
 
 		resp, err := app.Test(req)
 		if err != nil {

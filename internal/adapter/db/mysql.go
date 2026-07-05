@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/rsb/garmin-weight-sync/internal/domain"
 )
@@ -157,18 +158,40 @@ func (r *MySQLRepository) consolidateToOneRowPerDay() error {
 	return nil
 }
 
+// changedExpr is true when this upsert actually introduces a new value for
+// at least one metric (using MySQL's null-safe <=> so a NULL -> value
+// transition also counts as changed). It's reused for both timestamp and
+// synced_at below: a duplicate submission with identical values (e.g. the
+// Shortcut re-running with the same reading later the same day) must not
+// bump timestamp or reset synced_at, or an already-synced day would get
+// re-queued for a redundant Garmin upload.
+const changedExpr = `(
+		(VALUES(bmi) IS NOT NULL AND NOT (VALUES(bmi) <=> bmi)) OR
+		(VALUES(fat_percentage) IS NOT NULL AND NOT (VALUES(fat_percentage) <=> fat_percentage)) OR
+		(VALUES(weight) IS NOT NULL AND NOT (VALUES(weight) <=> weight))
+	)`
+
 // Save inserts or merges a body composition measurement into that day's row.
+// A resubmission that doesn't actually change bmi/fat_percentage/weight is a
+// no-op on timestamp/synced_at (see changedExpr) so it doesn't undo an
+// already-completed Garmin sync for that day.
 func (r *MySQLRepository) Save(ctx context.Context, m *domain.BodyComposition) error {
+	// timestamp/synced_at must be assigned before bmi/fat_percentage/weight in
+	// this SET list: MySQL evaluates a single-table UPDATE's assignments
+	// left-to-right, so a bare column reference (e.g. "weight") in a later
+	// expression sees the value just assigned by an earlier one, not the
+	// original row. Evaluating changedExpr first means it still compares
+	// against the pre-upsert values.
 	query := `
 	INSERT INTO measurements (measurement_date, apple_health_id, bmi, fat_percentage, weight, timestamp)
 	VALUES (DATE(FROM_UNIXTIME(? / 1000)), ?, ?, ?, ?, ?)
 	ON DUPLICATE KEY UPDATE
 		apple_health_id = VALUES(apple_health_id),
+		timestamp = IF(` + changedExpr + `, VALUES(timestamp), timestamp),
+		synced_at = IF(` + changedExpr + `, NULL, synced_at),
 		bmi = IF(VALUES(bmi) IS NOT NULL, VALUES(bmi), bmi),
 		fat_percentage = IF(VALUES(fat_percentage) IS NOT NULL, VALUES(fat_percentage), fat_percentage),
-		weight = IF(VALUES(weight) IS NOT NULL, VALUES(weight), weight),
-		timestamp = VALUES(timestamp),
-		synced_at = NULL;`
+		weight = IF(VALUES(weight) IS NOT NULL, VALUES(weight), weight);`
 
 	_, err := r.db.ExecContext(
 		ctx,
@@ -187,9 +210,12 @@ func (r *MySQLRepository) Save(ctx context.Context, m *domain.BodyComposition) e
 }
 
 // FindUnsynced returns every measurement day not yet pushed to Garmin Connect.
+// Each result carries its MeasurementDate — the row's real identity — so
+// callers (MarkSynced) can match on it directly instead of re-deriving it
+// from Timestamp.
 func (r *MySQLRepository) FindUnsynced(ctx context.Context) ([]*domain.BodyComposition, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT apple_health_id, bmi, fat_percentage, weight, timestamp
+	SELECT measurement_date, apple_health_id, bmi, fat_percentage, weight, timestamp
 	FROM measurements
 	WHERE synced_at IS NULL
 	ORDER BY measurement_date ASC;`)
@@ -202,12 +228,14 @@ func (r *MySQLRepository) FindUnsynced(ctx context.Context) ([]*domain.BodyCompo
 	for rows.Next() {
 		var (
 			m                domain.BodyComposition
+			measurementDate  time.Time
 			appleHealthID    sql.NullString
 			bmi, fat, weight sql.NullFloat64
 		)
-		if err := rows.Scan(&appleHealthID, &bmi, &fat, &weight, &m.Timestamp); err != nil {
+		if err := rows.Scan(&measurementDate, &appleHealthID, &bmi, &fat, &weight, &m.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan unsynced measurement: %w", err)
 		}
+		m.MeasurementDate = measurementDate.Format("2006-01-02")
 		m.AppleHealthID = appleHealthID.String
 		m.BMI = bmi.Float64
 		m.FatPercentage = fat.Float64
@@ -220,14 +248,19 @@ func (r *MySQLRepository) FindUnsynced(ctx context.Context) ([]*domain.BodyCompo
 	return result, nil
 }
 
-// MarkSynced records that the day containing m.Timestamp has been pushed to
-// Garmin Connect.
+// MarkSynced records that m.MeasurementDate has been pushed to Garmin
+// Connect. The match also includes m.Timestamp (the value FindUnsynced
+// snapshotted) as an optimistic-concurrency check: Save always rewrites
+// timestamp on every upsert, so if a concurrent Save touched this day since we
+// read it, this becomes a no-op instead of stamping synced_at over an upload
+// that never saw the new data.
 func (r *MySQLRepository) MarkSynced(ctx context.Context, m *domain.BodyComposition) error {
 	_, err := r.db.ExecContext(ctx, `
 	UPDATE measurements
 	SET synced_at = CURRENT_TIMESTAMP
-	WHERE measurement_date = DATE(FROM_UNIXTIME(? / 1000));`,
-		m.Timestamp,
+	WHERE measurement_date = ?
+	  AND timestamp = ?;`,
+		m.MeasurementDate, m.Timestamp,
 	)
 	if err != nil {
 		return fmt.Errorf("mark measurement synced: %w", err)

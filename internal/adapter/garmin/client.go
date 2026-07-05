@@ -1,6 +1,7 @@
 package garmin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -24,7 +25,7 @@ type Client struct {
 	cfg Config
 
 	httpClient *http.Client
-	sleep      func()
+	sleep      func(ctx context.Context) error
 
 	mu     sync.Mutex
 	oauth1 *oauth1Token
@@ -54,11 +55,14 @@ func NewClient(cfg Config) (*Client, error) {
 }
 
 // Sync uploads a single measurement to Garmin Connect (mechanism doc §7).
-func (c *Client) Sync(m *domain.BodyComposition) error {
+// ctx is honored across the anti-bot sleeps and network calls a full SSO
+// login can require (tens of seconds) — cancelling it (e.g. during graceful
+// shutdown) aborts the sync promptly instead of blocking until it finishes.
+func (c *Client) Sync(ctx context.Context, m *domain.BodyComposition) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.ensureOAuth2(); err != nil {
+	if err := c.ensureOAuth2(ctx); err != nil {
 		if isUnrecoverableAuth(err) {
 			// Signal the caller to stop the batch and alert a human, rather
 			// than retrying (which can deepen a lockout).
@@ -72,7 +76,7 @@ func (c *Client) Sync(m *domain.BodyComposition) error {
 		return fmt.Errorf("encode fit file: %w", err)
 	}
 
-	result, err := uploadFIT(c.httpClient, c.oauth2.AccessToken, fitBytes)
+	result, err := uploadFIT(ctx, c.httpClient, c.oauth2.AccessToken, fitBytes)
 	if err != nil {
 		return fmt.Errorf("upload to garmin: %w", err)
 	}
@@ -86,13 +90,13 @@ func (c *Client) Sync(m *domain.BodyComposition) error {
 
 // ensureOAuth2 makes sure c.oauth2 holds a valid bearer token, refreshing via
 // the cached OAuth1 pair or, failing that, running a full SSO login.
-func (c *Client) ensureOAuth2() error {
+func (c *Client) ensureOAuth2(ctx context.Context) error {
 	if c.oauth2.valid() {
 		return nil
 	}
 
 	if c.oauth1 != nil {
-		tok, err := getOAuth2(c.httpClient, c.oauth1)
+		tok, err := getOAuth2(ctx, c.httpClient, c.oauth1)
 		if err == nil {
 			c.oauth2 = tok
 			return nil
@@ -101,7 +105,7 @@ func (c *Client) ensureOAuth2() error {
 		c.oauth1 = nil
 	}
 
-	return c.fullLogin()
+	return c.fullLogin(ctx)
 }
 
 // isUnrecoverableAuth reports whether an auth error needs manual intervention
@@ -113,68 +117,75 @@ func isUnrecoverableAuth(err error) bool {
 		errors.Is(err, ErrRateLimited)
 }
 
-// fullLogin runs the SSO/CAS flow from scratch (mechanism doc §3.2). It
-// cannot complete unattended if Garmin demands an MFA code — cron-based sync
-// has no one to prompt, so that case surfaces as an error. Run the
-// cmd/garmin-login CLI out-of-band to seed cfg.TokenCachePath before that
-// ever happens in production.
-func (c *Client) fullLogin() error {
+// login runs the shared SSO/CAS flow (mechanism doc §3.2): submit
+// credentials, then — if Garmin demands an MFA code — hand off to onMFA to
+// either complete it or report why it can't, before exchanging the resulting
+// ticket for a cached OAuth1/OAuth2 token pair. fullLogin and
+// LoginInteractive differ only in onMFA.
+func (c *Client) login(ctx context.Context, onMFA func(ctx context.Context, auth *ssoAuth) (string, error)) error {
 	auth, err := newSSOAuth(c.sleep)
 	if err != nil {
 		return err
 	}
 
-	ticket, err := auth.login(c.cfg.Username, c.cfg.Password)
+	ticket, err := auth.login(ctx, c.cfg.Username, c.cfg.Password)
 	if errors.Is(err, ErrMFARequired) {
-		return fmt.Errorf("%w: cron sync cannot complete MFA unattended; run cmd/garmin-login to seed %s with a valid OAuth1 token pair", ErrMFARequired, c.cfg.TokenCachePath)
-	}
-	if err != nil {
+		if ticket, err = onMFA(ctx, auth); err != nil {
+			return err
+		}
+	} else if err != nil {
 		return fmt.Errorf("sso login: %w", err)
 	}
 
-	return c.exchangeTicket(ticket)
+	return c.exchangeTicket(ctx, ticket)
+}
+
+// fullLogin runs the SSO/CAS flow from scratch (mechanism doc §3.2). It
+// cannot complete unattended if Garmin demands an MFA code — cron-based sync
+// has no one to prompt, so that case surfaces as an error. Run the
+// cmd/garmin-login CLI out-of-band to seed cfg.TokenCachePath before that
+// ever happens in production.
+func (c *Client) fullLogin(ctx context.Context) error {
+	return c.login(ctx, func(context.Context, *ssoAuth) (string, error) {
+		return "", fmt.Errorf("%w: cron sync cannot complete MFA unattended; run cmd/garmin-login to seed %s with a valid OAuth1 token pair", ErrMFARequired, c.cfg.TokenCachePath)
+	})
 }
 
 // LoginInteractive runs the SSO/CAS flow, invoking promptMFA if Garmin
 // requests a multi-factor code, then caches the resulting OAuth1 token pair.
 // It's meant for one-off out-of-band setup (see cmd/garmin-login) so that
 // unattended cron sync never has to handle an MFA challenge itself.
-func (c *Client) LoginInteractive(promptMFA func() (string, error)) error {
+func (c *Client) LoginInteractive(ctx context.Context, promptMFA func() (string, error)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	auth, err := newSSOAuth(c.sleep)
-	if err != nil {
-		return err
-	}
-
-	ticket, err := auth.login(c.cfg.Username, c.cfg.Password)
-	if errors.Is(err, ErrMFARequired) {
-		code, perr := promptMFA()
-		if perr != nil {
-			return fmt.Errorf("read mfa code: %w", perr)
+	return c.login(ctx, func(ctx context.Context, auth *ssoAuth) (string, error) {
+		code, err := promptMFA()
+		if err != nil {
+			return "", fmt.Errorf("read mfa code: %w", err)
 		}
-		c.sleep()
-		ticket, err = auth.completeMFA(code)
-	}
-	if err != nil {
-		return fmt.Errorf("sso login: %w", err)
-	}
-
-	return c.exchangeTicket(ticket)
+		if err := auth.sleep(ctx); err != nil {
+			return "", err
+		}
+		return auth.completeMFA(ctx, code)
+	})
 }
 
 // exchangeTicket turns a CAS service ticket into cached OAuth1/OAuth2 tokens
 // (mechanism doc §3.2 Steps 3-4).
-func (c *Client) exchangeTicket(ticket string) error {
-	c.sleep()
-	oauth1Tok, err := getOAuth1(c.httpClient, ticket)
+func (c *Client) exchangeTicket(ctx context.Context, ticket string) error {
+	if err := c.sleep(ctx); err != nil {
+		return err
+	}
+	oauth1Tok, err := getOAuth1(ctx, c.httpClient, ticket)
 	if err != nil {
 		return fmt.Errorf("oauth1 exchange: %w", err)
 	}
 
-	c.sleep()
-	oauth2Tok, err := getOAuth2(c.httpClient, oauth1Tok)
+	if err := c.sleep(ctx); err != nil {
+		return err
+	}
+	oauth2Tok, err := getOAuth2(ctx, c.httpClient, oauth1Tok)
 	if err != nil {
 		return fmt.Errorf("oauth2 exchange: %w", err)
 	}

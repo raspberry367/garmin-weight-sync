@@ -58,6 +58,40 @@ outer layers. Wire concrete implementations in `cmd/server/main.go` only.
 - Units are explicit in field names/comments (kg, %) to avoid Apple Health / Garmin
   unit mismatches.
 
+## Deploying locally with Docker
+
+1. Copy `.env.example` to `.env` and fill in `GARMIN_USERNAME`, `GARMIN_PASSWORD`, and
+   `API_KEY` (the Shortcut must send this value in the `X-API-Key` header — the intake
+   endpoint rejects any request without a matching header). Set `TELEGRAM_BOT_TOKEN` /
+   `TELEGRAM_CHAT_ID` too if you want sync alerts.
+2. `make up` — builds the app image and starts it alongside a MySQL 8.4 container
+   (`docker-compose.yml`). The app waits for MySQL's healthcheck before starting and
+   runs its own schema migrations on boot.
+3. `make garmin-login` — runs the separate `cmd/garmin-login` binary
+   (`docker compose exec -it app /app/garmin-login`), a one-off **interactive** CLI that
+   logs in to Garmin Connect, prompts you on the terminal for an MFA code if Garmin asks
+   for one, and caches the resulting OAuth1 token pair to `./data/garmin_token.json`.
+   Do this once before relying on auto-sync — the unattended server can reuse a cached
+   token but can't complete an MFA prompt itself (no human to answer it). Without a
+   seeded token, the first sync attempt hits `ErrMFARequired` and alerts (if Telegram is
+   configured) instead of completing. Re-run it any time the cached token gets rejected.
+4. Point the Apple Shortcut at `http://<host>:3000/api/v1/measurements` with the
+   `X-API-Key` header set to your configured `API_KEY`.
+
+**Is a separate cron needed? No.** The server has a built-in sync loop
+(`runGarminSyncLoop` in `cmd/server/main.go`) that runs immediately on startup and then
+every `SYNC_INTERVAL_MINUTES` (default 60) for as long as the container is running — no
+host crontab or external scheduler required. `cmd/garmin-login` (step 3) is a separate,
+manually-run binary, not part of that loop — it exists only to seed/refresh the token
+cache when MFA is involved.
+
+```
+make down            # stop containers
+make logs            # tail container logs
+make mysql-shell      # open interactive MySQL shell inside the DB container
+make clean            # stop and delete volumes (wipes the DB)
+```
+
 ## Commands & Docker Orchestration
 
 Run commands locally:
@@ -78,11 +112,12 @@ make mysql-shell           # open interactive MySQL terminal inside DB container
 make clean                 # clean stop and purge volumes
 ```
 
-## Endpoints (planned)
+## Endpoints
 
-- `POST /api/v1/measurements` — accept body-composition JSON from the Shortcut, sync to
-  Garmin. Auth via a shared secret / API key header (the phone is the only client).
-- `GET /health` — liveness.
+- `POST /api/v1/measurements` — accepts body-composition JSON from the Shortcut, saves
+  it, and lets the background Garmin sync loop pick it up. Requires an `X-API-Key`
+  header matching `API_KEY`.
+- `GET /health` — liveness, no auth required.
 
 ## Notes / open questions
 

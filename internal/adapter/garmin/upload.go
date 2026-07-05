@@ -2,6 +2,7 @@ package garmin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +20,7 @@ type uploadResult struct {
 
 // uploadFIT posts a binary FIT file to the upload-service. Both 2xx and 409
 // (duplicate upload) are treated as success (mechanism doc §6).
-func uploadFIT(httpClient *http.Client, bearer string, fitBytes []byte) (*uploadResult, error) {
+func uploadFIT(ctx context.Context, httpClient *http.Client, bearer string, fitBytes []byte) (*uploadResult, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -37,7 +38,7 @@ func uploadFIT(httpClient *http.Client, bearer string, fitBytes []byte) (*upload
 		return nil, fmt.Errorf("close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, uploadURL, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, &body)
 	if err != nil {
 		return nil, err
 	}

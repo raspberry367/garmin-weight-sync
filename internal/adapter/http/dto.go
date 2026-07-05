@@ -45,6 +45,16 @@ func (f *FlexibleFloat64) UnmarshalJSON(b []byte) error {
 // Float64 returns the value as float64.
 func (f FlexibleFloat64) Float64() float64 { return float64(f) }
 
+// FullBodyCompositionRequest is the wire shape for a full body-composition
+// payload from the Shortcut (all metrics in one request).
+type FullBodyCompositionRequest struct {
+	BMI           float64 `json:"bmi"`
+	FatPercentage float64 `json:"fat_percentage"`
+	Weight        float64 `json:"weight"`
+	Timestamp     int64   `json:"timestamp"`
+	AppleHealthID string  `json:"apple_health_id"`
+}
+
 // SingleMeasurementRequest represents a single measurement value from Apple Shortcut.
 type SingleMeasurementRequest struct {
 	Type      MeasurementType `json:"type"`

@@ -36,7 +36,7 @@ func main() {
 	}
 
 	fmt.Println("Logging in to Garmin Connect...")
-	err = client.LoginInteractive(func() (string, error) {
+	err = client.LoginInteractive(context.Background(), func() (string, error) {
 		fmt.Print("Enter MFA code: ")
 		reader := bufio.NewReader(os.Stdin)
 		code, err := reader.ReadString('\n')
